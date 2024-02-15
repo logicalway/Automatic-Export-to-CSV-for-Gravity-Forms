@@ -202,8 +202,8 @@ class GravityFormsAutomaticCSVExport {
         $_POST['export_field'][] = 'user_agent';
         $_POST['export_field'][] = 'ip';
 
-		$_POST['export_date_start'] = $search_criteria['start_date'];
-		$_POST['export_date_end']   = $search_criteria['end_date'];
+		$_POST['export_date_start'] = (( isset($search_criteria['start_date']) )?$search_criteria['start_date']:'');
+		$_POST['export_date_end']   = (( isset($search_criteria['end_date']) )?$search_criteria['end_date']:'');
 
 		$export = self::start_automated_export( $form, $offset = 0, $form_id . '-' . date('Y-m-d-giA') );
 
