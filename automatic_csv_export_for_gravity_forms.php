@@ -455,6 +455,8 @@ class GravityFormsAutomaticCSVExport {
 
 				GFCommon::log_debug( __METHOD__ . '(): Processing entry #' . $lead['id'] );
 
+				$lines_xls = array();
+
 				foreach ( $fields as $field_id ) {
 
 					switch ( $field_id ) {
@@ -504,6 +506,9 @@ class GravityFormsAutomaticCSVExport {
 						if ( is_array( $value ) ) {
 							$value = implode( '|', $value );
 						}
+
+						// PHP 8.1+ : strpos()/str_replace() n'acceptent plus null
+						$value = (string) $value;
 
 						if ( strpos( $value, '=' ) === 0 ) {
 							// Prevent Excel formulas
