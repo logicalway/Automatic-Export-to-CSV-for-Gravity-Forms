@@ -193,6 +193,11 @@ class GFAutomaticCSVAddOn extends GFAddOn {
                 data.append("nonce", ' . wp_json_encode( $nonce ) . ');
                 var fid = ' . wp_json_encode( $form_id ) . ' || new URLSearchParams(window.location.search).get("id") || (window.gf_vars && window.gf_vars.formId) || "";
                 data.append("form_id", fid);
+                if (!fid) {
+                    out.style.color = "#b32d2e";
+                    out.textContent = ' . wp_json_encode( __( 'Form ID not found on this page.', 'automatic_csv_export_for_gravity_forms' ) ) . ';
+                    return;
+                }
                 ["email_address", "email_subject", "email_content", "search_criteria"].forEach(function (n) { data.append(n, val(n)); });
                 data.append("format_export", radio("format_export"));
                 btn.disabled = true;
