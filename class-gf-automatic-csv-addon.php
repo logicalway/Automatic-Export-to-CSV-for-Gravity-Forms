@@ -206,8 +206,8 @@ class GFAutomaticCSVAddOn extends GFAddOn {
                 fetch(ajaxurl, { method: "POST", credentials: "same-origin", body: data })
                     .then(function (resp) {
                         return resp.text().then(function (txt) {
-                            try { return JSON.parse(txt); }
-                            catch (e) { return { success: false, data: { message: "HTTP " + resp.status + " " + txt.slice(0, 120) } }; }
+                            try { var j = JSON.parse(txt); if (j && typeof j === "object") { return j; } throw 0; }
+                            catch (e) { return { success: false, data: { message: "HTTP " + resp.status + " (" + txt.slice(0, 120) + ")" + (txt.trim() === "0" ? " - action AJAX non enregistrée : le plugin actif n\'est pas à jour" : "") } }; }
                         });
                     })
                     .then(function (r) {
