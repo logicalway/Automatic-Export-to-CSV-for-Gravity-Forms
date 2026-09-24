@@ -168,6 +168,9 @@ class GFAutomaticCSVAddOn extends GFAddOn {
 
         $nonce   = wp_create_nonce( 'gf_auto_csv_test' );
         $form_id = absint( rgget( 'id' ) );
+        if ( ! $form_id && isset( $_GET['id'] ) ) {
+            $form_id = absint( $_GET['id'] );
+        }
 
         $html  = '<button type="button" class="button" id="gf-auto-csv-send-test">' . esc_html__( 'Send a test export', 'automatic_csv_export_for_gravity_forms' ) . '</button> ';
         $html .= '<span id="gf-auto-csv-test-result" role="status" style="margin-left:8px;"></span>';
@@ -188,14 +191,20 @@ class GFAutomaticCSVAddOn extends GFAddOn {
                 var data = new FormData();
                 data.append("action", "gf_auto_csv_send_test");
                 data.append("nonce", ' . wp_json_encode( $nonce ) . ');
-                data.append("form_id", ' . wp_json_encode( $form_id ) . ');
+                var fid = ' . wp_json_encode( $form_id ) . ' || new URLSearchParams(window.location.search).get("id") || (window.gf_vars && window.gf_vars.formId) || "";
+                data.append("form_id", fid);
                 ["email_address", "email_subject", "email_content", "search_criteria"].forEach(function (n) { data.append(n, val(n)); });
                 data.append("format_export", radio("format_export"));
                 btn.disabled = true;
                 out.style.color = "";
                 out.textContent = ' . wp_json_encode( __( 'Sending…', 'automatic_csv_export_for_gravity_forms' ) ) . ';
                 fetch(ajaxurl, { method: "POST", credentials: "same-origin", body: data })
-                    .then(function (r) { return r.json(); })
+                    .then(function (resp) {
+                        return resp.text().then(function (txt) {
+                            try { return JSON.parse(txt); }
+                            catch (e) { return { success: false, data: { message: "HTTP " + resp.status + " " + txt.slice(0, 120) } }; }
+                        });
+                    })
                     .then(function (r) {
                         var ok = r && r.success;
                         out.style.color = ok ? "#1a7f37" : "#b32d2e";
