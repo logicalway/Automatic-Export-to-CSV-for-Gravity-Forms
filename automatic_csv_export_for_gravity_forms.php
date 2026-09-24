@@ -3,7 +3,7 @@
 Plugin Name: Automatic Export to CSV for Gravity Forms
 Plugin URI: http://gravitycsv.com
 Description: Automatically send an email containing a CSV export of your Gravity Form entries on a schedule.
-Version: 0.3.2
+Version: 0.3.3
 Author: Alex Cavender
 Author URI: http://alexcavender.com/
 Text Domain: automatic_csv_export_for_gravity_forms
@@ -17,6 +17,20 @@ define( 'GF_AUTOMATIC_CSV_VERSION', '0.3.3' );
 require_once( 'inc/excelwriter.inc.php' );
 
 // require 'api.php';
+
+/**
+ * Deserialise une valeur d'export sans instancier d'objets (anti injection d'objet PHP).
+ *
+ * @param mixed $value
+ * @return array
+ */
+function gf_auto_csv_safe_unserialize( $value ) {
+	if ( is_array( $value ) ) {
+		return $value;
+	}
+	$list = is_string( $value ) ? @unserialize( $value, array( 'allowed_classes' => false ) ) : false;
+	return is_array( $list ) ? $list : array();
+}
 
 class GravityFormsAutomaticCSVExport {
 
@@ -166,13 +180,13 @@ class GravityFormsAutomaticCSVExport {
 		}
 
 		if ( $form['automatic_csv_export_for_gravity_forms']['search_criteria'] == 'previous_week' ) {
-			$search_criteria['start_date'] = date('Y-m-d', time() - 604800000 );
+			$search_criteria['start_date'] = date('Y-m-d', time() - 7 * 24 * 60 * 60 );
 			$search_criteria['end_date'] = date('Y-m-d', time() - 60 * 60 * 24 );
 
 		}
 
 		if ( $form['automatic_csv_export_for_gravity_forms']['search_criteria'] == 'previous_month' ) {
-			$search_criteria['start_date'] = date('Y-m-d', time() - 2678400000 );
+			$search_criteria['start_date'] = date('Y-m-d', time() - 31 * 24 * 60 * 60 );
 			$search_criteria['end_date'] = date('Y-m-d', time() - 60 * 60 * 24 );
 		}
 
@@ -297,11 +311,16 @@ class GravityFormsAutomaticCSVExport {
         // $baseurl = $upload_dir['baseurl'];
         $path = $upload_dir['path'];
 
-        $file_name = "/export-" . $form_id . '-' . date('Y-m-d-giA') . ".csv";
+        $file_name = "export-" . $form_id . '-' . date('Y-m-d-giA') . ".csv";
         $file_path = trailingslashit( $path ) . $file_name;
 
+        // repart d'un fichier vide : les pages sont ajoutees a la suite
+        if ( file_exists( $file_path ) ) {
+            unlink( $file_path );
+        }
+
         if( isset($format_export) && $format_export == 'xls' ) {
-            $file_xls = trailingslashit( $path ) . "/export-" . $form_id . '-' . date('Y-m-d-giA') . ".xls";;
+            $file_xls = trailingslashit( $path ) . "export-" . $form_id . '-' . date('Y-m-d-giA') . ".xls";
             $excel = new ExcelWriter( $file_xls );
             if ( $excel == false ) {
                 echo $excel->error;
@@ -375,6 +394,7 @@ class GravityFormsAutomaticCSVExport {
 
 			if ( $remaining_entry_count == 0 ) {
 				GFExport::write_file( $lines, $export_id );
+				file_put_contents( $file_path, $lines, FILE_APPEND );
 			}
 
 		}
@@ -423,7 +443,7 @@ class GravityFormsAutomaticCSVExport {
 
 					if ( isset( $field_rows[ $field_id ] ) ) {
 
-						$list = empty( $value ) ? array() : unserialize( $value );
+						$list = empty( $value ) ? array() : gf_auto_csv_safe_unserialize( $value );
 
 						foreach ( $list as $row ) {
 							$row_values = array_values( $row );
@@ -485,30 +505,15 @@ class GravityFormsAutomaticCSVExport {
 			$remaining_entry_count -= $page_size;
 
 			if ( ! seems_utf8( $lines ) ) {
-				$lines = utf8_encode( $lines );
+				$lines = function_exists( 'mb_convert_encoding' ) ? mb_convert_encoding( $lines, 'UTF-8', 'ISO-8859-1' ) : utf8_encode( $lines );
 			}
 
 			$lines = apply_filters( 'gform_export_lines', $lines );
 
 			GFExport::write_file( $lines, $export_id );
 
-
-            if( isset($format_export) && $format_export == 'xls' ) {
-                $excel->close();
-            }
-
-			/*
-			BEGIN mods by Alex C
-			*/
-
-			$myfile = fopen( $file_path, "w") or die("Unable to open file!");
-
-			fwrite($myfile, $lines);
-			fclose($myfile);
-
-			/*
-			END mods by Alex C
-			*/
+			// ajoute la page courante au fichier (au lieu de l'ecraser)
+			file_put_contents( $file_path, $lines, FILE_APPEND );
 
             $time_end = microtime( true );
 			$execution_time = ( $time_end - $time_start );
@@ -518,6 +523,10 @@ class GravityFormsAutomaticCSVExport {
 			}
 
 			$lines = '';
+		}
+
+		if ( isset( $excel ) ) {
+			$excel->close();
 		}
 
 		$complete = $remaining_entry_count <= 0;
