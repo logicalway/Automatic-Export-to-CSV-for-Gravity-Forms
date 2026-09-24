@@ -145,9 +145,75 @@ class GFAutomaticCSVAddOn extends GFAddOn {
                         'name' => 'email_address',
                         'tooltip' => esc_html__( 'The export will be sent to this email address', 'automatic_csv_export_for_gravity_forms' ),
                         'class' => 'medium'
+                    ),
+                    array(
+                        'label' => esc_html__( 'Test', 'automatic_csv_export_for_gravity_forms' ),
+                        'type'  => 'send_test',
+                        'name'  => 'send_test',
+                        'tooltip' => esc_html__( 'Sends an export now to the e-mail address above, using the settings currently displayed (even if not saved yet).', 'automatic_csv_export_for_gravity_forms' ),
                     )
                 ),
             ),
         );
+    }
+
+    /**
+     * Champ personnalise : bouton de test d'envoi (rien n'est enregistre)
+     *
+     * @param array $field
+     * @param bool  $echo
+     * @return string
+     */
+    public function settings_send_test( $field, $echo = true ) {
+
+        $nonce   = wp_create_nonce( 'gf_auto_csv_test' );
+        $form_id = absint( rgget( 'id' ) );
+
+        $html  = '<button type="button" class="button" id="gf-auto-csv-send-test">' . esc_html__( 'Send a test export', 'automatic_csv_export_for_gravity_forms' ) . '</button> ';
+        $html .= '<span id="gf-auto-csv-test-result" role="status" style="margin-left:8px;"></span>';
+        $html .= '<script>
+        (function () {
+            var btn = document.getElementById("gf-auto-csv-send-test");
+            var out = document.getElementById("gf-auto-csv-test-result");
+            if (!btn) { return; }
+            function val(name) {
+                var el = document.querySelector("[name=\"_gaddon_setting_" + name + "\"]");
+                return el ? el.value : "";
+            }
+            function radio(name) {
+                var el = document.querySelector("[name=\"_gaddon_setting_" + name + "\"]:checked");
+                return el ? el.value : "csv";
+            }
+            btn.addEventListener("click", function () {
+                var data = new FormData();
+                data.append("action", "gf_auto_csv_send_test");
+                data.append("nonce", ' . wp_json_encode( $nonce ) . ');
+                data.append("form_id", ' . wp_json_encode( $form_id ) . ');
+                ["email_address", "email_subject", "email_content", "search_criteria"].forEach(function (n) { data.append(n, val(n)); });
+                data.append("format_export", radio("format_export"));
+                btn.disabled = true;
+                out.style.color = "";
+                out.textContent = ' . wp_json_encode( __( 'Sending…', 'automatic_csv_export_for_gravity_forms' ) ) . ';
+                fetch(ajaxurl, { method: "POST", credentials: "same-origin", body: data })
+                    .then(function (r) { return r.json(); })
+                    .then(function (r) {
+                        var ok = r && r.success;
+                        out.style.color = ok ? "#1a7f37" : "#b32d2e";
+                        out.textContent = (ok ? ' . wp_json_encode( __( 'Test sent to ', 'automatic_csv_export_for_gravity_forms' ) ) . ' : ' . wp_json_encode( __( 'Failed: ', 'automatic_csv_export_for_gravity_forms' ) ) . ') + ((r && r.data && r.data.message) || "");
+                    })
+                    .catch(function () {
+                        out.style.color = "#b32d2e";
+                        out.textContent = ' . wp_json_encode( __( 'Request failed.', 'automatic_csv_export_for_gravity_forms' ) ) . ';
+                    })
+                    .then(function () { btn.disabled = false; });
+            });
+        })();
+        </script>';
+
+        if ( $echo ) {
+            echo $html;
+        }
+
+        return $html;
     }
 }

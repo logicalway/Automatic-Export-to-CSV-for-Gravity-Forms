@@ -36,15 +36,13 @@ class GravityFormsAutomaticCSVExport {
 
 	public function __construct() {
 
-		if ( class_exists( 'GFAPI' ) ) {
-
-			add_filter( 'cron_schedules', array($this, 'add_weekly' ) );
-			add_filter( 'cron_schedules', array($this, 'add_monthly' ) );
-			add_action( 'admin_init', array($this, 'gforms_create_schedules' ) );
-
-			add_action( 'init', array( $this, 'register_cron_hooks' ) );
-
-		}
+		// GFAPI peut ne pas etre charge a ce stade (ordre alphabetique des plugins) :
+		// les hooks sont donc toujours enregistres et testent GFAPI au moment de l'appel
+		add_filter( 'cron_schedules', array( $this, 'add_weekly' ) );
+		add_filter( 'cron_schedules', array( $this, 'add_monthly' ) );
+		add_action( 'admin_init', array( $this, 'gforms_create_schedules' ) );
+		add_action( 'init', array( $this, 'register_cron_hooks' ) );
+		add_action( 'wp_ajax_gf_auto_csv_send_test', array( $this, 'ajax_send_test' ) );
 
 	}
 
@@ -55,6 +53,10 @@ class GravityFormsAutomaticCSVExport {
 		* @return void
 	*/
 	public function register_cron_hooks() {
+
+		if ( ! class_exists( 'GFAPI' ) ) {
+			return;
+		}
 
 		foreach ( GFAPI::get_forms() as $form ) {
 			$settings = isset( $form['automatic_csv_export_for_gravity_forms'] ) ? $form['automatic_csv_export_for_gravity_forms'] : array();
@@ -140,6 +142,10 @@ class GravityFormsAutomaticCSVExport {
 	*/
 	public function gforms_create_schedules(){
 
+		if ( ! class_exists( 'GFAPI' ) ) {
+			return;
+		}
+
 		$forms = GFAPI::get_forms();
 
 		foreach ( $forms as $form ) {
@@ -183,15 +189,42 @@ class GravityFormsAutomaticCSVExport {
 	*/
 	public function gforms_automated_export() {
 
-		$output = "";
 		if ( ! preg_match( '/^csv_export_(\d+)$/', current_filter(), $matches ) ) {
 			return;
 		}
-		$form_id = (int) $matches[1];
+
+		$this->run_export( (int) $matches[1] );
+
+	}
+
+
+	/**
+		* Genere l'export d'un formulaire et l'envoie par e-mail
+		*
+		* @param int   $form_id
+		* @param array $overrides Reglages surchargeant ceux du formulaire (test depuis l'ecran de reglages)
+		* @param bool  $is_test   Mode test : envoie meme sans entree, sujet prefixe [TEST]
+		* @return array array( 'success' => bool, 'message' => string )
+	*/
+	public function run_export( $form_id, $overrides = array(), $is_test = false ) {
+
+		if ( ! class_exists( 'GFAPI' ) ) {
+			return array( 'success' => false, 'message' => 'Gravity Forms is not active.' );
+		}
+
 		$form = GFAPI::get_form( $form_id ); // get form by ID
+		if ( ! $form ) {
+			return array( 'success' => false, 'message' => 'Form not found.' );
+		}
+
+		$form['automatic_csv_export_for_gravity_forms'] = array_merge(
+			isset( $form['automatic_csv_export_for_gravity_forms'] ) ? (array) $form['automatic_csv_export_for_gravity_forms'] : array(),
+			$overrides
+		);
+
 		$search_criteria = array();
 
-        $format_export = $form['automatic_csv_export_for_gravity_forms']['format_export'];
+        $format_export = isset( $form['automatic_csv_export_for_gravity_forms']['format_export'] ) ? $form['automatic_csv_export_for_gravity_forms']['format_export'] : 'csv';
 
 		if ( $form['automatic_csv_export_for_gravity_forms']['search_criteria'] == 'all' ) {
 			$search_criteria = array();
@@ -245,63 +278,117 @@ class GravityFormsAutomaticCSVExport {
 		// jeton aleatoire : nom de fichier imprevisible
 		$export_id = $form_id . '-' . date('Y-m-d-giA') . '-' . wp_generate_password( 12, false );
 
+		$email_address = isset( $form['automatic_csv_export_for_gravity_forms']['email_address'] ) ? trim( $form['automatic_csv_export_for_gravity_forms']['email_address'] ) : '';
+
+		if ( ! is_email( $email_address ) ) {
+			GFCommon::log_error( __METHOD__ . '(): adresse e-mail invalide pour le formulaire #' . $form_id );
+			return array( 'success' => false, 'message' => 'Invalid e-mail address.' );
+		}
+
 		$export = self::start_automated_export( $form, 0, $export_id, $export_fields, $date_start, $date_end );
 
 		$path = untrailingslashit( self::get_export_dir() );
 
-		// $server = $_SERVER['HTTP_HOST'];
+		$email_subject = isset( $form['automatic_csv_export_for_gravity_forms']['email_subject'] ) ? $form['automatic_csv_export_for_gravity_forms']['email_subject'] : '';
+		if ( ! $email_subject ) {
+			$email_subject = 'Automatic Form Export';
+		}
 
-		$email_address = $form['automatic_csv_export_for_gravity_forms']['email_address'];
+		$email_content = isset( $form['automatic_csv_export_for_gravity_forms']['email_content'] ) ? $form['automatic_csv_export_for_gravity_forms']['email_content'] : '';
+		if ( ! $email_content ) {
+			$email_content = 'CSV export is attached to this message'."\n\r\n\r\n\r";
+		}
 
-		$email_subject = $form['automatic_csv_export_for_gravity_forms']['email_subject'];
-        if( $email_subject ) {} else {
-            $email_subject = 'Automatic Form Export';
-        }
+		if ( $is_test ) {
+			$email_subject = '[TEST] ' . $email_subject;
+		}
 
-        $email_content = $form['automatic_csv_export_for_gravity_forms']['email_content'];
-        if( $email_content ) {} else {
-            $email_content = 'CSV export is attached to this message'."\n\r\n\r\n\r";
-        }
+		$file_csv = $path . '/export-' . $export_id . '.csv';
+		$file_xls = $path . '/export-' . $export_id . '.xls';
 
-		// Send an email using the latest csv file
-        $file_csv = $path . '/export-' . $export_id . '.csv';
-        $file_xls = $path . '/export-' . $export_id . '.xls';
+		$cleanup = function () use ( $file_csv, $file_xls ) {
+			foreach ( array( $file_csv, $file_xls ) as $file ) {
+				if ( file_exists( $file ) ) {
+					unlink( $file );
+				}
+			}
+		};
 
-        // if( is_file($file) ) {}
+		// le cron n'envoie rien sans entree ; le test envoie toujours (en-tetes seuls)
+		$has_file = file_exists( $file_csv ) && filesize( $file_csv ) > 0;
+		if ( ! $has_file || ( ! $is_test && empty( $export['total'] ) ) ) {
 
-        // si le fichier a bien ete cree
-        if( file_exists($file_csv) && filesize($file_csv) > 0 ) {
+			GFCommon::log_error( __METHOD__ . '(): aucun export a envoyer pour le formulaire #' . $form_id );
+			$cleanup();
 
-            if( isset($format_export) && $format_export == 'xls' ) {
-                $mail_attachment = array($file_xls);
-            } else {
-                $mail_attachment = array($file_csv);
-            }
+			return array( 'success' => false, 'message' => 'No entries to export.' );
 
-            // https://developer.wordpress.org/reference/functions/get_option/
-            $headers[] = 'From: '.get_option('blogname').' <'.get_option('admin_email').'>';
-            wp_mail( $email_address , $email_subject, $email_content, $headers, $mail_attachment);
+		}
 
-            unlink( $file_csv );
+		$attachment = ( 'xls' === $format_export && file_exists( $file_xls ) ) ? $file_xls : $file_csv;
 
-            if( isset($format_export) && $format_export == 'xls' ) {
-                unlink( $file_xls );
-            }
+		$mail_error = '';
+		$on_failure = function ( $error ) use ( &$mail_error ) {
+			$mail_error = $error->get_error_message();
+		};
+		add_action( 'wp_mail_failed', $on_failure );
 
-        } else {
+		// https://developer.wordpress.org/reference/functions/get_option/
+		$headers = array( 'From: ' . get_option( 'blogname' ) . ' <' . get_option( 'admin_email' ) . '>' );
+		$sent    = wp_mail( $email_address, $email_subject, $email_content, $headers, array( $attachment ) );
 
-            GFCommon::log_error( __METHOD__ . '(): aucun fichier d\'export genere pour le formulaire #' . $form_id );
+		remove_action( 'wp_mail_failed', $on_failure );
+		$cleanup();
 
-            // ne laisse pas de fichier residuel
-            foreach ( array( $file_csv, $file_xls ) as $leftover ) {
-                if ( file_exists( $leftover ) ) {
-                    unlink( $leftover );
-                }
-            }
+		if ( ! $sent ) {
+			GFCommon::log_error( __METHOD__ . '(): echec wp_mail formulaire #' . $form_id . ' ' . $mail_error );
+			return array( 'success' => false, 'message' => $mail_error ? $mail_error : 'wp_mail() failed.' );
+		}
 
-        }
+		return array( 'success' => true, 'message' => $email_address );
 
-    }
+	}
+
+
+	/**
+		* AJAX : envoie un export de test avec les reglages affiches (meme non enregistres)
+		*
+		* @return void
+	*/
+	public function ajax_send_test() {
+
+		check_ajax_referer( 'gf_auto_csv_test', 'nonce' );
+
+		if ( ! class_exists( 'GFCommon' ) || ! GFCommon::current_user_can_any( 'gravityforms_edit_forms' ) ) {
+			wp_send_json_error( array( 'message' => 'Forbidden.' ), 403 );
+		}
+
+		$form_id = isset( $_POST['form_id'] ) ? absint( $_POST['form_id'] ) : 0;
+		if ( ! $form_id ) {
+			wp_send_json_error( array( 'message' => 'Invalid form.' ), 400 );
+		}
+
+		$format   = isset( $_POST['format_export'] ) && 'xls' === $_POST['format_export'] ? 'xls' : 'csv';
+		$criteria = isset( $_POST['search_criteria'] ) ? sanitize_key( wp_unslash( $_POST['search_criteria'] ) ) : 'previous_day';
+		if ( ! in_array( $criteria, array( 'all', 'previous_day', 'previous_week', 'previous_month' ), true ) ) {
+			$criteria = 'previous_day';
+		}
+
+		$result = $this->run_export( $form_id, array(
+			'email_address'   => isset( $_POST['email_address'] ) ? sanitize_email( wp_unslash( $_POST['email_address'] ) ) : '',
+			'email_subject'   => isset( $_POST['email_subject'] ) ? sanitize_text_field( wp_unslash( $_POST['email_subject'] ) ) : '',
+			'email_content'   => isset( $_POST['email_content'] ) ? sanitize_textarea_field( wp_unslash( $_POST['email_content'] ) ) : '',
+			'format_export'   => $format,
+			'search_criteria' => $criteria,
+		), true );
+
+		if ( $result['success'] ) {
+			wp_send_json_success( array( 'message' => $result['message'] ) );
+		}
+
+		wp_send_json_error( array( 'message' => $result['message'] ) );
+
+	}
 
 
 	/**
@@ -586,6 +673,7 @@ class GravityFormsAutomaticCSVExport {
 			'status'   => $complete ? 'complete' : 'in_progress',
 			'offset'   => $offset,
 			'exportId' => $export_id,
+			'total'    => $total_entry_count,
 			'progress' => $remaining_entry_count > 0 ? intval( 100 - ( $remaining_entry_count / $total_entry_count ) * 100 ) . '%' : '',
 		);
 
