@@ -280,9 +280,18 @@ class GravityFormsAutomaticCSVExport {
 
 		$email_address = isset( $form['automatic_csv_export_for_gravity_forms']['email_address'] ) ? trim( $form['automatic_csv_export_for_gravity_forms']['email_address'] ) : '';
 
-		if ( ! is_email( $email_address ) ) {
+		// plusieurs destinataires possibles, separes par virgule ou point-virgule
+		$recipients = array_filter( array_map( 'trim', preg_split( '/[,;]+/', $email_address ) ) );
+		$invalid    = array_filter( $recipients, function ( $address ) {
+			return ! is_email( $address );
+		} );
+
+		if ( empty( $recipients ) || $invalid ) {
 			GFCommon::log_error( __METHOD__ . '(): adresse e-mail invalide pour le formulaire #' . $form_id );
-			return array( 'success' => false, 'message' => 'Invalid e-mail address.' );
+			return array(
+				'success' => false,
+				'message' => empty( $recipients ) ? 'No e-mail address set.' : 'Invalid e-mail address: ' . implode( ', ', $invalid ),
+			);
 		}
 
 		$export = self::start_automated_export( $form, 0, $export_id, $export_fields, $date_start, $date_end );
@@ -335,7 +344,7 @@ class GravityFormsAutomaticCSVExport {
 
 		// https://developer.wordpress.org/reference/functions/get_option/
 		$headers = array( 'From: ' . get_option( 'blogname' ) . ' <' . get_option( 'admin_email' ) . '>' );
-		$sent    = wp_mail( $email_address, $email_subject, $email_content, $headers, array( $attachment ) );
+		$sent    = wp_mail( $recipients, $email_subject, $email_content, $headers, array( $attachment ) );
 
 		remove_action( 'wp_mail_failed', $on_failure );
 		$cleanup();
@@ -345,7 +354,7 @@ class GravityFormsAutomaticCSVExport {
 			return array( 'success' => false, 'message' => $mail_error ? $mail_error : 'wp_mail() failed.' );
 		}
 
-		return array( 'success' => true, 'message' => $email_address );
+		return array( 'success' => true, 'message' => implode( ', ', $recipients ) );
 
 	}
 
@@ -375,7 +384,7 @@ class GravityFormsAutomaticCSVExport {
 		}
 
 		$result = $this->run_export( $form_id, array(
-			'email_address'   => isset( $_POST['email_address'] ) ? sanitize_email( wp_unslash( $_POST['email_address'] ) ) : '',
+			'email_address'   => isset( $_POST['email_address'] ) ? sanitize_text_field( wp_unslash( $_POST['email_address'] ) ) : '',
 			'email_subject'   => isset( $_POST['email_subject'] ) ? sanitize_text_field( wp_unslash( $_POST['email_subject'] ) ) : '',
 			'email_content'   => isset( $_POST['email_content'] ) ? sanitize_textarea_field( wp_unslash( $_POST['email_content'] ) ) : '',
 			'format_export'   => $format,

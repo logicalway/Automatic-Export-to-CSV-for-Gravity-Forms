@@ -180,11 +180,11 @@ class GFAutomaticCSVAddOn extends GFAddOn {
             var out = document.getElementById("gf-auto-csv-test-result");
             if (!btn) { return; }
             function val(name) {
-                var el = document.querySelector("[name=\"_gaddon_setting_" + name + "\"]");
+                var el = document.querySelector("[name=\"_gform_setting_" + name + "\"], [name=\"_gaddon_setting_" + name + "\"]");
                 return el ? el.value : "";
             }
             function radio(name) {
-                var el = document.querySelector("[name=\"_gaddon_setting_" + name + "\"]:checked");
+                var el = document.querySelector("[name=\"_gform_setting_" + name + "\"]:checked, [name=\"_gaddon_setting_" + name + "\"]:checked");
                 return el ? el.value : "csv";
             }
             btn.addEventListener("click", function () {
