@@ -204,9 +204,10 @@ class GravityFormsAutomaticCSVExport {
 		* @param int   $form_id
 		* @param array $overrides Reglages surchargeant ceux du formulaire (test depuis l'ecran de reglages)
 		* @param bool  $is_test   Mode test : envoie meme sans entree, sujet prefixe [TEST]
+		* @param array $bcc       Adresses en copie cachee (test : utilisateur connecte)
 		* @return array array( 'success' => bool, 'message' => string )
 	*/
-	public function run_export( $form_id, $overrides = array(), $is_test = false ) {
+	public function run_export( $form_id, $overrides = array(), $is_test = false, $bcc = array() ) {
 
 		if ( ! class_exists( 'GFAPI' ) ) {
 			return array( 'success' => false, 'message' => 'Gravity Forms is not active.' );
@@ -344,6 +345,9 @@ class GravityFormsAutomaticCSVExport {
 
 		// https://developer.wordpress.org/reference/functions/get_option/
 		$headers = array( 'From: ' . get_option( 'blogname' ) . ' <' . get_option( 'admin_email' ) . '>' );
+		foreach ( array_filter( (array) $bcc, 'is_email' ) as $bcc_address ) {
+			$headers[] = 'Bcc: ' . $bcc_address;
+		}
 		$sent    = wp_mail( $recipients, $email_subject, $email_content, $headers, array( $attachment ) );
 
 		remove_action( 'wp_mail_failed', $on_failure );
@@ -389,7 +393,7 @@ class GravityFormsAutomaticCSVExport {
 			'email_content'   => isset( $_POST['email_content'] ) ? sanitize_textarea_field( wp_unslash( $_POST['email_content'] ) ) : '',
 			'format_export'   => $format,
 			'search_criteria' => $criteria,
-		), true );
+		), true, array( wp_get_current_user()->user_email ) );
 
 		if ( $result['success'] ) {
 			wp_send_json_success( array( 'message' => $result['message'] ) );
