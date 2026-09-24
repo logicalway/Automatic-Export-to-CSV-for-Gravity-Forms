@@ -42,34 +42,54 @@ class GravityFormsAutomaticCSVExport {
 			add_filter( 'cron_schedules', array($this, 'add_monthly' ) );
 			add_action( 'admin_init', array($this, 'gforms_create_schedules' ) );
 
-			global $wpdb;
-			$prefix = $wpdb->prefix;
-
-            $table_name = $prefix . "gf_form_meta";
-
-            // https://docs.gravityforms.com/database-storage-structure-reference/#changes-from-gravity-forms-2-2
-            // Check if Table exists in Database
-            if ( $wpdb->get_var("SHOW TABLES LIKE '$table_name'") == $table_name ) {
-
-                $forms = $wpdb->get_results( "SELECT * FROM " . $prefix . "gf_form_meta" );
-            } else {
-                $forms = $wpdb->get_results( "SELECT * FROM " . $prefix . "rg_form_meta" );
-            }
-
-			foreach ( $forms as $form ) {
-				$form_id = $form->form_id;
-				$display_meta = $form->display_meta;
-				$decode = json_decode( $display_meta );
-
-				if ( $decode ){
-					$enabled = isset( $decode->automatic_csv_export_for_gravity_forms ) ? $decode->automatic_csv_export_for_gravity_forms->enabled : 0;
-					if ( $enabled == 1 ) {
-						add_action( 'csv_export_' . $form_id , array( $this, 'gforms_automated_export' ) );
-					}
-				}
-			}
+			add_action( 'init', array( $this, 'register_cron_hooks' ) );
 
 		}
+
+	}
+
+
+	/**
+		* Attache l'export aux evenements cron des formulaires actives
+		*
+		* @return void
+	*/
+	public function register_cron_hooks() {
+
+		foreach ( GFAPI::get_forms() as $form ) {
+			$settings = isset( $form['automatic_csv_export_for_gravity_forms'] ) ? $form['automatic_csv_export_for_gravity_forms'] : array();
+			if ( ! empty( $settings['enabled'] ) ) {
+				add_action( 'csv_export_' . $form['id'], array( $this, 'gforms_automated_export' ) );
+			}
+		}
+
+	}
+
+
+	/**
+		* Dossier prive des exports temporaires (acces web interdit)
+		*
+		* @return string Chemin avec slash final, ou '' en cas d'echec
+	*/
+	public static function get_export_dir() {
+
+		$upload_dir = wp_upload_dir();
+		$dir = trailingslashit( $upload_dir['basedir'] ) . 'gf-automatic-csv-export/';
+
+		if ( ! is_dir( $dir ) ) {
+			wp_mkdir_p( $dir );
+		}
+		if ( ! is_dir( $dir ) ) {
+			return '';
+		}
+		if ( ! file_exists( $dir . 'index.php' ) ) {
+			file_put_contents( $dir . 'index.php', "<?php\n// Silence is golden.\n" );
+		}
+		if ( ! file_exists( $dir . '.htaccess' ) ) {
+			file_put_contents( $dir . '.htaccess', "Require all denied\nDeny from all\n" );
+		}
+
+		return $dir;
 
 	}
 
@@ -103,7 +123,7 @@ class GravityFormsAutomaticCSVExport {
 	public function add_monthly( $schedules ) {
 		// add a 'weekly' schedule to the existing set
 		$schedules['monthly'] = array(
-			'interval' => 604800 * 4,
+			'interval' => 30 * DAY_IN_SECONDS,
 			'display' => __('Once Monthly')
 		);
 		return $schedules;
@@ -130,21 +150,21 @@ class GravityFormsAutomaticCSVExport {
 
 			if ( $enabled == 1 ) {
 
-				if ( ! wp_next_scheduled( 'csv_export_' . $form_id ) ) {
+				$hook      = 'csv_export_' . $form_id;
+				$frequency = ! empty( $form['automatic_csv_export_for_gravity_forms']['csv_export_frequency'] ) ? $form['automatic_csv_export_for_gravity_forms']['csv_export_frequency'] : 'daily';
 
-					$form = GFAPI::get_form( $form_id );
-
-					$frequency = $form['automatic_csv_export_for_gravity_forms']['csv_export_frequency'];
-
-					wp_schedule_event( time(), $frequency, 'csv_export_' . $form_id );
-
+				// replanifie si la frequence a change
+				if ( wp_next_scheduled( $hook ) && wp_get_schedule( $hook ) !== $frequency ) {
+					wp_clear_scheduled_hook( $hook );
 				}
 
-			} else {
+				if ( ! wp_next_scheduled( $hook ) ) {
+					wp_schedule_event( time(), $frequency, $hook );
+				}
 
-				$timestamp = wp_next_scheduled( 'csv_export_' . $form_id );
+			} elseif ( wp_next_scheduled( 'csv_export_' . $form_id ) ) {
 
-				wp_unschedule_event( $timestamp, 'csv_export_' . $form_id );
+				wp_clear_scheduled_hook( 'csv_export_' . $form_id );
 
 			}
 
@@ -164,7 +184,10 @@ class GravityFormsAutomaticCSVExport {
 	public function gforms_automated_export() {
 
 		$output = "";
-		$form_id = explode('_', current_filter())[2];
+		if ( ! preg_match( '/^csv_export_(\d+)$/', current_filter(), $matches ) ) {
+			return;
+		}
+		$form_id = (int) $matches[1];
 		$form = GFAPI::get_form( $form_id ); // get form by ID
 		$search_criteria = array();
 
@@ -192,7 +215,7 @@ class GravityFormsAutomaticCSVExport {
 
 		require_once( GFCommon::get_base_path() . '/export.php' );
 
-		$_POST['export_field'] = array();
+		$export_fields = array();
 
         foreach( $form['fields'] as $field ) {
 
@@ -200,31 +223,31 @@ class GravityFormsAutomaticCSVExport {
             if ( is_array($field["inputs"] ) ) {
                 // loop through inputs
                 foreach( $field["inputs"] as $input ) {
-                    $_POST['export_field'][] = $input["id"];
+                    $export_fields[] = $input["id"];
                 }
             } else {
-                $_POST['export_field'][] = $field->id;
+                $export_fields[] = $field->id;
             }
 
 		}
 
         // aditionnal field
-        $_POST['export_field'][] = 'created_by';
-        $_POST['export_field'][] = 'id';
-        $_POST['export_field'][] = 'date_created';
-        $_POST['export_field'][] = 'source_url';
-        $_POST['export_field'][] = 'user_agent';
-        $_POST['export_field'][] = 'ip';
+        $export_fields[] = 'created_by';
+        $export_fields[] = 'id';
+        $export_fields[] = 'date_created';
+        $export_fields[] = 'source_url';
+        $export_fields[] = 'user_agent';
+        $export_fields[] = 'ip';
 
-		$_POST['export_date_start'] = (( isset($search_criteria['start_date']) )?$search_criteria['start_date']:'');
-		$_POST['export_date_end']   = (( isset($search_criteria['end_date']) )?$search_criteria['end_date']:'');
+		$date_start = (( isset($search_criteria['start_date']) )?$search_criteria['start_date']:'');
+		$date_end   = (( isset($search_criteria['end_date']) )?$search_criteria['end_date']:'');
 
-		$export = self::start_automated_export( $form, $offset = 0, $form_id . '-' . date('Y-m-d-giA') );
+		// jeton aleatoire : nom de fichier imprevisible
+		$export_id = $form_id . '-' . date('Y-m-d-giA') . '-' . wp_generate_password( 12, false );
 
-		$upload_dir = wp_upload_dir();
+		$export = self::start_automated_export( $form, 0, $export_id, $export_fields, $date_start, $date_end );
 
-		// $baseurl = $upload_dir['baseurl'];
-		$path = $upload_dir['path'];
+		$path = untrailingslashit( self::get_export_dir() );
 
 		// $server = $_SERVER['HTTP_HOST'];
 
@@ -241,8 +264,8 @@ class GravityFormsAutomaticCSVExport {
         }
 
 		// Send an email using the latest csv file
-        $file_csv = $path . '/export-' . $form_id . '-' . date('Y-m-d-giA') . '.csv';
-        $file_xls = $path . '/export-' . $form_id . '-' . date('Y-m-d-giA') . '.xls';
+        $file_csv = $path . '/export-' . $export_id . '.csv';
+        $file_xls = $path . '/export-' . $export_id . '.xls';
 
         // if( is_file($file) ) {}
 
@@ -265,6 +288,17 @@ class GravityFormsAutomaticCSVExport {
                 unlink( $file_xls );
             }
 
+        } else {
+
+            GFCommon::log_error( __METHOD__ . '(): aucun fichier d\'export genere pour le formulaire #' . $form_id );
+
+            // ne laisse pas de fichier residuel
+            foreach ( array( $file_csv, $file_xls ) as $leftover ) {
+                if ( file_exists( $leftover ) ) {
+                    unlink( $leftover );
+                }
+            }
+
         }
 
     }
@@ -284,7 +318,7 @@ class GravityFormsAutomaticCSVExport {
 	}
 
 
-	public static function start_automated_export( $form, $offset = 0, $export_id = '' ) {
+	public static function start_automated_export( $form, $offset = 0, $export_id = '', $fields = null, $export_date_start = '', $export_date_end = '' ) {
 
 		$time_start = microtime( true );
 
@@ -304,14 +338,12 @@ class GravityFormsAutomaticCSVExport {
 		$page_size = 20;
 
 		$form_id = $form['id'];
-		$fields  = $_POST['export_field'];
+		$fields  = is_array( $fields ) ? $fields : array();
 
 
-        $upload_dir = wp_upload_dir();
-        // $baseurl = $upload_dir['baseurl'];
-        $path = $upload_dir['path'];
+        $path = self::get_export_dir();
 
-        $file_name = "export-" . $form_id . '-' . date('Y-m-d-giA') . ".csv";
+        $file_name = "export-" . $export_id . ".csv";
         $file_path = trailingslashit( $path ) . $file_name;
 
         // repart d'un fichier vide : les pages sont ajoutees a la suite
@@ -320,18 +352,18 @@ class GravityFormsAutomaticCSVExport {
         }
 
         if( isset($format_export) && $format_export == 'xls' ) {
-            $file_xls = trailingslashit( $path ) . "export-" . $form_id . '-' . date('Y-m-d-giA') . ".xls";
+            $file_xls = trailingslashit( $path ) . "export-" . $export_id . ".xls";
             $excel = new ExcelWriter( $file_xls );
             if ( $excel == false ) {
                 echo $excel->error;
             }
         }
 
-		$start_date = empty( $_POST['export_date_start'] ) ? '' : self::get_gmt_date( $_POST['export_date_start'] . ' 00:00:00' );
-		$end_date   = empty( $_POST['export_date_end'] ) ? '' : self::get_gmt_date( $_POST['export_date_end'] . ' 23:59:59' );
+		$start_date = empty( $export_date_start ) ? '' : self::get_gmt_date( $export_date_start . ' 00:00:00' );
+		$end_date   = empty( $export_date_end ) ? '' : self::get_gmt_date( $export_date_end . ' 23:59:59' );
 
 		$search_criteria['status']        = 'active';
-		$search_criteria['field_filters'] = GFCommon::get_field_filters_from_post( $form );
+		$search_criteria['field_filters'] = array();
 		if ( ! empty( $start_date ) ) {
 			$search_criteria['start_date'] = $start_date;
 		}
